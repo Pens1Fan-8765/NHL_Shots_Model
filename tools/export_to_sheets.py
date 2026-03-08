@@ -5,7 +5,7 @@ Pushes today's ranked picks to a shared Google Sheet.
 
 Requires:
   .env with GOOGLE_SHEETS_ID
-  credentials.json (Google Cloud OAuth client — gitignored)
+  service_account.json (Google Cloud Service Account key — gitignored)
   .tmp/best_lines_YYYY-MM-DD.csv
 
 Sheet columns:
@@ -16,10 +16,10 @@ Result column is left blank — fill it in the next day with actual SOG.
 
 First-time setup:
   1. Go to Google Cloud Console → Create project → Enable Google Sheets API
-  2. Create OAuth 2.0 Desktop credentials → Download as credentials.json
-  3. Place credentials.json in the project root (it's gitignored)
-  4. Run this script — a browser window opens to authorize
-  5. token.json is saved locally for future runs
+  2. Create a Service Account → download JSON key → rename to service_account.json
+  3. Place service_account.json in the project root (it's gitignored)
+  4. Share your Google Sheet with the service account's client_email (Editor access)
+  5. Run this script — no browser pop-up, works permanently
 """
 
 import csv
@@ -28,16 +28,13 @@ from datetime import date
 
 import gspread
 from dotenv import load_dotenv
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.service_account import Credentials
 
 load_dotenv()
 
 TMP_DIR = os.path.join(os.path.dirname(__file__), "..", ".tmp")
 ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
-CREDENTIALS_PATH = os.path.join(ROOT_DIR, "credentials.json")
-TOKEN_PATH = os.path.join(ROOT_DIR, "token.json")
+SERVICE_ACCOUNT_PATH = os.path.join(ROOT_DIR, "service_account.json")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 SHEET_HEADERS = [
@@ -47,25 +44,12 @@ SHEET_HEADERS = [
 
 
 def get_google_creds() -> Credentials:
-    creds = None
-    if os.path.exists(TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists(CREDENTIALS_PATH):
-                raise FileNotFoundError(
-                    "credentials.json not found. Download from Google Cloud Console "
-                    "and place in the project root. See workflows/sportsbook_scraping.md."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_PATH, "w") as token:
-            token.write(creds.to_json())
-
-    return creds
+    if not os.path.exists(SERVICE_ACCOUNT_PATH):
+        raise FileNotFoundError(
+            "service_account.json not found. Download from Google Cloud Console "
+            "(Service Account → Keys → Add Key → JSON) and place in the project root."
+        )
+    return Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH, scopes=SCOPES)
 
 
 def format_player_name(player_key: str) -> str:
