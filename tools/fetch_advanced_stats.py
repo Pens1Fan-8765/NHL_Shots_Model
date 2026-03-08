@@ -12,6 +12,7 @@ Player key format: {first_last}_{team_abbr}
 
 import csv
 import io
+import json
 import os
 import re
 from datetime import date
@@ -114,8 +115,22 @@ def main():
     today_str = date.today().isoformat()
     out_path = os.path.join(TMP_DIR, f"advanced_stats_{today_str}.csv")
 
+    # Load the filtered player set from fetch_player_game_logs.py
+    logs_path = os.path.join(TMP_DIR, f"player_logs_{today_str}.json")
+    if not os.path.exists(logs_path):
+        print(f"player_logs file not found: {logs_path}")
+        print("Run fetch_player_game_logs.py first.")
+        return
+    with open(logs_path) as f:
+        kept_players = set(json.load(f).keys())
+    print(f"Loaded {len(kept_players)} kept players from player_logs.")
+
     rows = fetch_advanced_stats()
-    player_stats = process_rows(rows)
+    all_stats = process_rows(rows)
+
+    # Only keep stats for players that passed the TOI filter
+    player_stats = {k: v for k, v in all_stats.items() if k in kept_players}
+    skipped = len(all_stats) - len(player_stats)
 
     fieldnames = ["player_key", "xSF_per_60", "CF_pct", "FF_pct", "iSCF_per_60"]
     with open(out_path, "w", newline="") as f:
@@ -123,6 +138,7 @@ def main():
         writer.writeheader()
         writer.writerows(player_stats.values())
 
+    print(f"Skipped {skipped} players below TOI threshold.")
     print(f"Saved advanced stats for {len(player_stats)} players to {out_path}")
 
 
