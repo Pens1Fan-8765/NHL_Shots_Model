@@ -129,9 +129,10 @@ def scrape_shotpropz() -> tuple[dict, dict]:
         ytd_data = parse_shotpropz_tables(page)
 
         print("  Switching to Recent (L10) view...")
-        page.click("text=Recent")
+        page.select_option("select", value="recent")
         page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(2000)  # allow JS to re-render tables
+        page.wait_for_selector("table", timeout=15000)  # wait for tables to re-render
+        page.wait_for_timeout(1000)
 
         print("  Scraping L10 data...")
         l10_data = parse_shotpropz_tables(page)
