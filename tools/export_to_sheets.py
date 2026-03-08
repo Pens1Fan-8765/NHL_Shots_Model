@@ -153,6 +153,170 @@ def update_yesterday_results(worksheet) -> None:
         print(f"  No sheet rows matched for {yesterday} results update.")
 
 
+def _apply_structural_formatting(spreadsheet, sheet_id: int) -> None:
+    """Apply header, freeze, column widths, and alternating row banding in one batch call."""
+    # Delete any existing banding on this sheet first (idempotency)
+    meta = spreadsheet.fetch_sheet_metadata()
+    requests = []
+    for sheet in meta.get("sheets", []):
+        if sheet["properties"]["sheetId"] != sheet_id:
+            continue
+        for band in sheet.get("bandedRanges", []):
+            requests.append({"deleteBanding": {"bandedRangeId": band["bandedRangeId"]}})
+
+    # Freeze row 1
+    requests.append({
+        "updateSheetProperties": {
+            "properties": {
+                "sheetId": sheet_id,
+                "gridProperties": {"frozenRowCount": 1},
+            },
+            "fields": "gridProperties.frozenRowCount",
+        }
+    })
+
+    # Header row: dark navy bg, white bold text, centered
+    requests.append({
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": 0, "endRowIndex": 1,
+                "startColumnIndex": 0, "endColumnIndex": 13,
+            },
+            "cell": {
+                "userEnteredFormat": {
+                    "backgroundColor": {"red": 0.102, "green": 0.153, "blue": 0.267},
+                    "horizontalAlignment": "CENTER",
+                    "textFormat": {
+                        "bold": True,
+                        "fontSize": 10,
+                        "foregroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+                    },
+                }
+            },
+            "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)",
+        }
+    })
+
+    # Column widths (index: pixels)
+    col_widths = {0: 100, 1: 160, 2: 60, 3: 60, 4: 85, 5: 65,
+                  6: 90, 7: 110, 8: 70, 9: 110, 10: 70, 11: 115, 12: 160}
+    for col_idx, px in col_widths.items():
+        requests.append({
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": col_idx,
+                    "endIndex": col_idx + 1,
+                },
+                "properties": {"pixelSize": px},
+                "fields": "pixelSize",
+            }
+        })
+
+    # Alternating row banding (rows 2+ only, skip header)
+    requests.append({
+        "addBanding": {
+            "bandedRange": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 1, "endRowIndex": 1000,
+                    "startColumnIndex": 0, "endColumnIndex": 13,
+                },
+                "rowProperties": {
+                    "firstBandColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+                    "secondBandColor": {"red": 0.953, "green": 0.957, "blue": 0.965},
+                },
+            }
+        }
+    })
+
+    spreadsheet.batch_update({"requests": requests})
+
+
+def _apply_conditional_formatting(spreadsheet, sheet_id: int) -> None:
+    """Clear all existing conditional format rules and re-add them (idempotent)."""
+    meta = spreadsheet.fetch_sheet_metadata()
+    existing_count = 0
+    for sheet in meta.get("sheets", []):
+        if sheet["properties"]["sheetId"] == sheet_id:
+            existing_count = len(sheet.get("conditionalFormats", []))
+            break
+
+    if existing_count > 0:
+        delete_requests = [
+            {"deleteConditionalFormatRule": {"sheetId": sheet_id, "index": i}}
+            for i in range(existing_count - 1, -1, -1)
+        ]
+        spreadsheet.batch_update({"requests": delete_requests})
+
+    def text_contains_rule(col: int, text: str, bg: dict, bold: bool = False) -> dict:
+        fmt: dict = {"backgroundColor": bg}
+        if bold:
+            fmt["textFormat"] = {"bold": True}
+        return {
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1, "endRowIndex": 1000,
+                        "startColumnIndex": col, "endColumnIndex": col + 1,
+                    }],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "TEXT_CONTAINS",
+                            "values": [{"userEnteredValue": text}],
+                        },
+                        "format": fmt,
+                    },
+                },
+                "index": 0,
+            }
+        }
+
+    def number_gte_rule(col: int, threshold: float, bg: dict, bold: bool = False) -> dict:
+        fmt: dict = {"backgroundColor": bg}
+        if bold:
+            fmt["textFormat"] = {"bold": True}
+        return {
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1, "endRowIndex": 1000,
+                        "startColumnIndex": col, "endColumnIndex": col + 1,
+                    }],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "NUMBER_GREATER_THAN_EQ",
+                            "values": [{"userEnteredValue": str(threshold)}],
+                        },
+                        "format": fmt,
+                    },
+                },
+                "index": 0,
+            }
+        }
+
+    add_requests = [
+        text_contains_rule(12, "HIT",   {"red": 0.776, "green": 0.937, "blue": 0.808}),
+        text_contains_rule(12, "MISS",  {"red": 1.0,   "green": 0.800, "blue": 0.800}),
+        text_contains_rule(6,  "OVER",  {"red": 0.851, "green": 0.918, "blue": 0.827}),
+        text_contains_rule(6,  "UNDER", {"red": 0.812, "green": 0.886, "blue": 0.953}),
+        text_contains_rule(11, "YES",   {"red": 1.0,   "green": 0.949, "blue": 0.800}),
+        number_gte_rule(9, 70.0,        {"red": 0.918, "green": 0.957, "blue": 0.918}, bold=True),
+    ]
+    spreadsheet.batch_update({"requests": add_requests})
+
+
+def apply_sheet_formatting(spreadsheet, worksheet) -> None:
+    """Apply all visual formatting to the Picks worksheet. Safe to call on every run."""
+    sheet_id = worksheet.id
+    _apply_structural_formatting(spreadsheet, sheet_id)
+    _apply_conditional_formatting(spreadsheet, sheet_id)
+
+
 def load_best_lines(today_str: str) -> list[dict]:
     path = os.path.join(TMP_DIR, f"best_lines_{today_str}.csv")
     if not os.path.exists(path):
@@ -222,11 +386,15 @@ def main():
     if not existing:
         worksheet.append_row(SHEET_HEADERS)
 
+    # Apply visual formatting (idempotent — safe every run)
+    print("Applying sheet formatting...")
+    apply_sheet_formatting(spreadsheet, worksheet)
+
     # Fill in yesterday's results before appending today's rows
     print("Updating yesterday's results...")
     update_yesterday_results(worksheet)
 
-    worksheet.append_rows(sheet_rows)
+    worksheet.append_rows(sheet_rows, value_input_option="USER_ENTERED")
     print(f"Exported {len(sheet_rows)} picks to Google Sheet.")
     print(f"Sheet URL: https://docs.google.com/spreadsheets/d/{sheet_id}")
 
