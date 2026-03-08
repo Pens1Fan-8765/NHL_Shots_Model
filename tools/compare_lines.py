@@ -102,7 +102,14 @@ def main():
                 worst_line = line
 
             # Lower line = better for over bet (easier to hit)
-            if best_line is None or line < best_line:
+            # Tie-break: when lines are equal, prefer better over odds (less juice)
+            is_better_line = best_line is None or line < best_line
+            is_tied_better_odds = (
+                line == best_line
+                and over_odds is not None
+                and (best_over_odds is None or over_odds > best_over_odds)
+            )
+            if is_better_line or is_tied_better_odds:
                 best_line = line
                 best_book = book
                 best_over_odds = over_odds

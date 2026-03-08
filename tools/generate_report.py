@@ -12,7 +12,7 @@ Filters to plays where: flagged == YES (confidence >= 60%, edge >= 0.3)
 
 import csv
 import os
-from datetime import date
+from datetime import date, timedelta
 
 TMP_DIR = os.path.join(os.path.dirname(__file__), "..", ".tmp")
 CONFIDENCE_THRESHOLD = 60.0
@@ -33,7 +33,80 @@ def format_odds(odds_val: str) -> str:
         return str(odds_val)
 
 
+def show_yesterday_results():
+    """Print yesterday's flagged picks and their actual SOG results."""
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    best_lines_path = os.path.join(TMP_DIR, f"best_lines_{yesterday}.csv")
+    real_labels_path = os.path.join(TMP_DIR, "real_labels.csv")
+
+    if not os.path.exists(best_lines_path) or not os.path.exists(real_labels_path):
+        return
+
+    # Load yesterday's flagged picks
+    flagged = {}
+    with open(best_lines_path, newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("flagged") == "YES":
+                flagged[row["player_key"]] = row
+
+    if not flagged:
+        return
+
+    # Load actual results from real_labels.csv filtered to yesterday
+    results = {}
+    with open(real_labels_path, newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("game_date") == yesterday:
+                results[row["player_key"]] = row
+
+    print()
+    print("=" * 78)
+    print(f"  YESTERDAY'S RESULTS — {yesterday}")
+    print("=" * 78)
+    header = f"  {'PLAYER':<24} {'LINE':>5} {'ACTUAL':>7} {'RESULT':<8} {'CONF':>5}"
+    print(header)
+    print("  " + "-" * 54)
+
+    hits = 0
+    resolved = 0
+
+    for player_key, pick in flagged.items():
+        result = results.get(player_key)
+
+        # Fuzzy fallback: match on name prefix without team suffix
+        if result is None:
+            name_prefix = "_".join(player_key.split("_")[:-1])
+            for k, v in results.items():
+                if "_".join(k.split("_")[:-1]) == name_prefix:
+                    result = v
+                    break
+
+        player = format_player_name(player_key)[:24]
+        line = float(pick.get("best_line", 0))
+        conf = f"{float(pick.get('confidence_score', 0)):.0f}%"
+        direction = pick.get("direction", "OVER")
+
+        if result:
+            actual = float(result["actual_sog"])
+            went_over = actual > line
+            hit = (went_over and direction == "OVER") or (not went_over and direction == "UNDER")
+            result_str = "HIT" if hit else "MISS"
+            if hit:
+                hits += 1
+            resolved += 1
+            print(f"  {player:<24} {line:>5.1f} {actual:>7.1f} {result_str:<8} {conf:>5}")
+        else:
+            print(f"  {player:<24} {line:>5.1f} {'?':>7} {'No result':<8} {conf:>5}")
+
+    print()
+    if resolved > 0:
+        print(f"  Record: {hits}/{resolved} ({hits/resolved*100:.0f}%)")
+    print("=" * 78)
+
+
 def main():
+    show_yesterday_results()
+
     today_str = date.today().isoformat()
     best_lines_path = os.path.join(TMP_DIR, f"best_lines_{today_str}.csv")
 

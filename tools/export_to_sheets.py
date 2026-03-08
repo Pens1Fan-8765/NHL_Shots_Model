@@ -24,7 +24,8 @@ First-time setup:
 
 import csv
 import os
-from datetime import date
+import re
+from datetime import date, timedelta
 
 import gspread
 from dotenv import load_dotenv
@@ -64,6 +65,92 @@ def format_odds(odds_val: str) -> str:
         return f"+{n}" if n > 0 else str(n)
     except (ValueError, TypeError):
         return str(odds_val)
+
+
+def normalize_name(name: str) -> str:
+    """Normalize a display name for matching: 'Nathan MacKinnon' -> 'nathanmackinnon'."""
+    name = name.lower().strip()
+    name = re.sub(r"[\s\-]+", "", name)
+    name = re.sub(r"[^a-z0-9]", "", name)
+    return name
+
+
+def key_to_normalized(player_key: str) -> str:
+    """Strip team suffix and normalize: 'nathan_mackinnon_COL' -> 'nathanmackinnon'."""
+    prefix = "_".join(player_key.split("_")[:-1])
+    return re.sub(r"[^a-z0-9]", "", prefix.lower())
+
+
+def update_yesterday_results(worksheet) -> None:
+    """Fill in the Result column for yesterday's picks using real_labels.csv."""
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    real_labels_path = os.path.join(TMP_DIR, "real_labels.csv")
+
+    if not os.path.exists(real_labels_path):
+        return
+
+    # Build lookup: normalized_name -> {actual_sog, line} for yesterday
+    results_lookup: dict[str, dict] = {}
+    with open(real_labels_path, newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("game_date") == yesterday:
+                norm = key_to_normalized(row["player_key"])
+                results_lookup[norm] = {
+                    "actual_sog": float(row["actual_sog"]),
+                    "line": float(row["line"]),
+                }
+
+    if not results_lookup:
+        return
+
+    all_rows = worksheet.get_all_values()
+    if not all_rows:
+        return
+
+    headers = all_rows[0]
+    try:
+        date_col = headers.index("Date")
+        player_col = headers.index("Player")
+        direction_col = headers.index("Direction")
+        result_col = headers.index("Result")
+    except ValueError:
+        print("  Warning: Could not find expected columns in sheet — skipping results update.")
+        return
+
+    updates = []
+    updated = 0
+
+    for row_idx, row in enumerate(all_rows[1:], start=2):  # row 1 is header; Sheets is 1-indexed
+        if len(row) <= result_col:
+            continue
+        if row[date_col] != yesterday:
+            continue
+        if row[result_col].strip():  # already filled in
+            continue
+
+        norm = normalize_name(row[player_col])
+        result_data = results_lookup.get(norm)
+        if result_data is None:
+            continue
+
+        actual = result_data["actual_sog"]
+        line = result_data["line"]
+        direction = row[direction_col] if len(row) > direction_col else "OVER"
+        went_over = actual > line
+        hit = (went_over and direction == "OVER") or (not went_over and direction == "UNDER")
+        label = "HIT" if hit else "MISS"
+        cell_value = f"{actual:.1f} SOG ({label})"
+
+        # gspread batch_update uses A1 notation
+        col_letter = chr(ord("A") + result_col)
+        updates.append({"range": f"{col_letter}{row_idx}", "values": [[cell_value]]})
+        updated += 1
+
+    if updates:
+        worksheet.spreadsheet.values_batch_update({"data": updates, "valueInputOption": "RAW"})
+        print(f"  Updated {updated} result(s) for {yesterday} in Google Sheet.")
+    else:
+        print(f"  No sheet rows matched for {yesterday} results update.")
 
 
 def load_best_lines(today_str: str) -> list[dict]:
@@ -134,6 +221,10 @@ def main():
     existing = worksheet.get_all_values()
     if not existing:
         worksheet.append_row(SHEET_HEADERS)
+
+    # Fill in yesterday's results before appending today's rows
+    print("Updating yesterday's results...")
+    update_yesterday_results(worksheet)
 
     worksheet.append_rows(sheet_rows)
     print(f"Exported {len(sheet_rows)} picks to Google Sheet.")
