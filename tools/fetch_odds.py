@@ -18,7 +18,7 @@ import json
 import os
 import re
 import time
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 
 import requests
 from dotenv import load_dotenv
@@ -50,11 +50,29 @@ def name_to_key(player_name: str, team_abbr: str) -> str:
 
 
 def fetch_event_ids(api_key: str) -> list[dict]:
-    """Get today's NHL event IDs from The Odds API."""
+    """Get today's NHL event IDs from The Odds API.
+    Filters to events starting before 07:00 UTC the day after today,
+    which covers all North American game times without pulling tomorrow's slate.
+    """
     url = f"{ODDS_API_BASE}/sports/{SPORT}/events"
     resp = requests.get(url, params={"apiKey": api_key}, timeout=10)
     resp.raise_for_status()
-    return resp.json()
+    all_events = resp.json()
+
+    # Cutoff: tomorrow at 07:00 UTC — anything after this is a future game
+    today = date.today()
+    cutoff = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(days=1, hours=7)
+
+    today_events = [
+        e for e in all_events
+        if datetime.fromisoformat(e["commence_time"].replace("Z", "+00:00")) < cutoff
+    ]
+
+    skipped = len(all_events) - len(today_events)
+    if skipped:
+        print(f"  (Skipped {skipped} future event(s) not on today's slate)")
+
+    return today_events
 
 
 def fetch_player_props(api_key: str, event_id: str) -> dict:
