@@ -26,6 +26,7 @@ run_step() {
 # Layer 1: Data collection (Friend A's scripts)
 run_step "Schedule"           fetch_nhl_schedule.py
 run_step "Player game logs"   fetch_player_game_logs.py
+run_step "Collect real labels" collect_real_labels.py   # completes yesterday's pending lines with actual SOG
 run_step "Team defense stats" fetch_team_defense_stats.py
 run_step "Advanced stats"     fetch_advanced_stats.py
 
@@ -36,6 +37,7 @@ run_step "Predict shots"      predict_shots.py
 # Layer 3: Lines comparison + output (Friend B's scripts)
 run_step "Fetch odds"         fetch_odds.py
 run_step "Compare lines"      compare_lines.py
+run_step "Save daily lines"   save_daily_lines.py       # saves today's real lines as pending labels for tomorrow
 run_step "Generate report"    generate_report.py
 run_step "Export to sheets"   export_to_sheets.py
 

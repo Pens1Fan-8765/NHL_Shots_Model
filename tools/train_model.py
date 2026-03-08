@@ -57,12 +57,45 @@ def baseline_projection(df: pd.DataFrame) -> pd.Series:
     )
 
 
+def load_labels(labels_path: str) -> pd.DataFrame:
+    """Load labels, merging real sportsbook lines over estimated ones where available.
+
+    real_labels.csv is built daily by collect_real_labels.py and contains actual
+    sportsbook lines. Where a (player_key, game_date) exists in both files, the
+    real line is used instead of the estimated proxy.
+    """
+    base = pd.read_csv(labels_path)
+    real_path = os.path.join(TMP_DIR, "real_labels.csv")
+
+    if not os.path.exists(real_path):
+        print("No real_labels.csv found — using estimated lines only.")
+        return base
+
+    real = pd.read_csv(real_path)
+    real_count = len(real)
+
+    # Tag sources so we can report the split
+    base["_source"] = "estimated"
+    real["_source"] = "real"
+
+    # Merge: keep all rows from base, replace with real where (player_key, game_date) matches
+    merged = pd.concat([base, real], ignore_index=True)
+    # Sort so real rows come last, then deduplicate keeping last (= real)
+    merged = merged.sort_values("_source").drop_duplicates(
+        subset=["player_key", "game_date"], keep="last"
+    ).drop(columns=["_source"])
+
+    real_used = len(merged[merged.index.isin(real.index)])
+    print(f"Labels: {len(base)} estimated + {real_count} real → {len(merged)} total ({real_count} real lines used)")
+    return merged
+
+
 def train(features_path: str, labels_path: str) -> None:
     os.makedirs(TMP_DIR, exist_ok=True)
 
     # Load and merge
     features_df = pd.read_csv(features_path)
-    labels_df = pd.read_csv(labels_path)  # columns: player_key, game_date, actual_sog, line
+    labels_df = load_labels(labels_path)
 
     df = features_df.merge(labels_df, on=["player_key", "game_date"], how="inner")
     print(f"Training on {len(df)} labeled examples.")
