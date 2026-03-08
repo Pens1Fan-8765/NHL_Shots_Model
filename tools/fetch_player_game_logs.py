@@ -7,8 +7,10 @@ from the NHL Stats API.
 Requires: .tmp/schedule_YYYY-MM-DD.json (run fetch_nhl_schedule.py first)
 Output:   .tmp/player_logs_YYYY-MM-DD.json
 
-Schema: {player_key: [{date, sog, toi, opponent, home, goals, assists}]}
+Schema: {player_key: [{date, sog, toi, pp_toi, opponent, home, goals, assists}]}
 Player key format: {first_last}_{team_abbr} e.g. nathan_mackinnon_COL
+
+Filters: Forwards averaging <= 14 min TOI excluded. Defensemen averaging <= 18 min TOI excluded.
 """
 
 import json
@@ -20,6 +22,9 @@ import requests
 TMP_DIR = os.path.join(os.path.dirname(__file__), "..", ".tmp")
 NHL_ROSTER_URL = "https://api-web.nhle.com/v1/roster/{team}/current"
 NHL_GAME_LOG_URL = "https://api-web.nhle.com/v1/player/{player_id}/game-log/now"
+
+MIN_TOI_FORWARD = 14.0    # Centers, wings excluded if avg TOI <= this
+MIN_TOI_DEFENSE = 18.0    # Defensemen excluded if avg TOI < this
 
 
 def make_player_key(first: str, last: str, team: str) -> str:
@@ -55,11 +60,12 @@ def fetch_game_log(player_id: int, n_games: int = 20) -> list[dict]:
     logs = []
     for game in data.get("gameLog", [])[:n_games]:
         toi_str = game.get("toi", "0:00")
-        toi_minutes = _toi_to_minutes(toi_str)
+        pp_toi_str = game.get("powerPlayToi", "0:00")
         logs.append({
             "date": game.get("gameDate", ""),
             "sog": game.get("shots", 0),
-            "toi": toi_minutes,
+            "toi": _toi_to_minutes(toi_str),
+            "pp_toi": _toi_to_minutes(pp_toi_str),
             "opponent": game.get("opponentAbbrev", ""),
             "home": game.get("homeRoadFlag", "H") == "H",
             "goals": game.get("goals", 0),
@@ -108,24 +114,41 @@ def main():
 
     print(f"\nFetching game logs for {len(all_players)} players...")
     player_logs: dict[str, list] = {}
+    filtered_forwards = 0
+    filtered_defense = 0
 
     for i, player in enumerate(all_players):
         key = make_player_key(player["first_name"], player["last_name"], player["team"])
         try:
             logs = fetch_game_log(player["player_id"])
+            if logs:
+                avg_toi = sum(g["toi"] for g in logs) / len(logs)
+                is_defense = player["position"] == "D"
+                threshold = MIN_TOI_DEFENSE if is_defense else MIN_TOI_FORWARD
+                if avg_toi <= threshold:
+                    if is_defense:
+                        filtered_defense += 1
+                    else:
+                        filtered_forwards += 1
+                    if (i + 1) % 20 == 0:
+                        print(f"  {i + 1}/{len(all_players)} done...")
+                    time.sleep(0.2)
+                    continue
             player_logs[key] = logs
             if (i + 1) % 20 == 0:
                 print(f"  {i + 1}/{len(all_players)} done...")
         except Exception as e:
             print(f"  {key}: ERROR — {e}")
-            player_logs[key] = []
         time.sleep(0.2)
 
     out_path = os.path.join(TMP_DIR, f"player_logs_{today_str}.json")
     with open(out_path, "w") as f:
         json.dump(player_logs, f, indent=2)
 
-    print(f"\nSaved logs for {len(player_logs)} players to {out_path}")
+    print(f"\nFiltered out {filtered_forwards + filtered_defense} players below TOI thresholds:")
+    print(f"  Forwards excluded (avg TOI <= {MIN_TOI_FORWARD} min): {filtered_forwards}")
+    print(f"  Defensemen excluded (avg TOI <= {MIN_TOI_DEFENSE} min): {filtered_defense}")
+    print(f"Saved logs for {len(player_logs)} players to {out_path}")
 
 
 if __name__ == "__main__":
