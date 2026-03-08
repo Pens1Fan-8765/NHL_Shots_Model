@@ -2,6 +2,7 @@
 .env
 credentials.json
 token.json
+service_account.json
 
 # Temporary files
 .tmp/
