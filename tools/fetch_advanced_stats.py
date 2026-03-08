@@ -73,23 +73,26 @@ def process_rows(rows: list[dict]) -> dict[str, dict]:
         if row.get("situation") != "all":
             continue
 
-        first = row.get("firstName", "")
-        last = row.get("lastName", "")
+        # MoneyPuck uses a single "name" column (e.g. "Alexander Wennberg")
+        full_name = row.get("name", "")
         team = row.get("team", "")
+        parts = full_name.strip().split(" ", 1)
 
-        if not first or not last or not team:
+        if len(parts) < 2 or not team:
             continue
+
+        first, last = parts[0], parts[1]
 
         key = make_player_key(first, last, team)
 
         try:
             toi = float(row.get("icetime", 0) or 0)
-            xsf = float(row.get("xShotsFor", 0) or 0)
-            cf = float(row.get("corsiFor", 0) or 0)
-            ca = float(row.get("corsiAgainst", 0) or 0)
-            ff = float(row.get("fenwickFor", 0) or 0)
-            fa = float(row.get("fenwickAgainst", 0) or 0)
-            iscf = float(row.get("shotAttemptsFor", 0) or 0)
+            xsf = float(row.get("I_F_xOnGoal", 0) or 0)
+            cf = float(row.get("OnIce_F_shotAttempts", 0) or 0)
+            ca = float(row.get("OnIce_A_shotAttempts", 0) or 0)
+            ff = float(row.get("OnIce_F_unblockedShotAttempts", 0) or 0)
+            fa = float(row.get("OnIce_A_unblockedShotAttempts", 0) or 0)
+            iscf = float(row.get("I_F_shotAttempts", 0) or 0)
 
             toi_60 = toi / 60 if toi > 0 else 1
             cf_pct = round(cf / (cf + ca) * 100, 2) if (cf + ca) > 0 else 0.0
