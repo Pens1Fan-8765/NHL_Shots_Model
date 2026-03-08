@@ -33,8 +33,14 @@ run_step "Advanced stats"     fetch_advanced_stats.py
 run_step "Build features"     build_features.py
 run_step "Predict shots"      predict_shots.py
 
+# Layer 3: Lines comparison + output (Friend B's scripts)
+run_step "Fetch odds"         fetch_odds.py
+run_step "Compare lines"      compare_lines.py
+run_step "Generate report"    generate_report.py
+run_step "Export to sheets"   export_to_sheets.py
+
 echo ""
 echo "========================================"
 echo "Done — $(date '+%Y-%m-%d %H:%M:%S')"
-echo "Output: .tmp/predictions_$(date +%Y-%m-%d).csv"
+echo "Output: .tmp/best_lines_$(date +%Y-%m-%d).csv"
 echo "========================================"
