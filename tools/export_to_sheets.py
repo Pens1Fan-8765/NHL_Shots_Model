@@ -3,6 +3,10 @@ export_to_sheets.py
 
 Pushes today's ranked picks to a shared Google Sheet.
 
+Two worksheets:
+  - "Today's Picks": cleared each run and rewritten with today's predictions only
+  - "Results":       yesterday's picks (with HIT/MISS filled in) appended here permanently
+
 Requires:
   .env with GOOGLE_SHEETS_ID
   service_account.json (Google Cloud Service Account key — gitignored)
@@ -11,8 +15,6 @@ Requires:
 Sheet columns:
   Date | Player | Team | Opp | Proj SOG | Line | Direction | Book | Odds |
   Confidence | Edge | Line Shopping | Result
-
-Result column is left blank — fill it in the next day with actual SOG.
 
 First-time setup:
   1. Go to Google Cloud Console → Create project → Enable Google Sheets API
@@ -53,6 +55,17 @@ def get_google_creds() -> Credentials:
     return Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH, scopes=SCOPES)
 
 
+def get_or_create_worksheet(spreadsheet, title: str):
+    """Get an existing worksheet by name, or create it with headers."""
+    try:
+        ws = spreadsheet.worksheet(title)
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=title, rows=1000, cols=20)
+        ws.append_row(SHEET_HEADERS)
+        print(f"  Created '{title}' worksheet with headers.")
+    return ws
+
+
 def format_player_name(player_key: str) -> str:
     parts = player_key.rsplit("_", 1)[0]
     words = parts.split("_")
@@ -81,76 +94,76 @@ def key_to_normalized(player_key: str) -> str:
     return re.sub(r"[^a-z0-9]", "", prefix.lower())
 
 
-def update_yesterday_results(worksheet) -> None:
-    """Fill in the Result column for yesterday's picks using real_labels.csv."""
+def move_yesterday_to_results(picks_ws, results_ws) -> None:
+    """
+    Read yesterday's picks from 'Today's Picks', fill in their results,
+    and append them permanently to the 'Results' sheet.
+    """
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     real_labels_path = os.path.join(TMP_DIR, "real_labels.csv")
 
-    if not os.path.exists(real_labels_path):
-        return
-
-    # Build lookup: normalized_name -> {actual_sog, line} for yesterday
-    results_lookup: dict[str, dict] = {}
-    with open(real_labels_path, newline="") as f:
-        for row in csv.DictReader(f):
-            if row.get("game_date") == yesterday:
-                norm = key_to_normalized(row["player_key"])
-                results_lookup[norm] = {
-                    "actual_sog": float(row["actual_sog"]),
-                    "line": float(row["line"]),
-                }
-
-    if not results_lookup:
-        return
-
-    all_rows = worksheet.get_all_values()
-    if not all_rows:
+    all_rows = picks_ws.get_all_values()
+    if len(all_rows) <= 1:
+        print("  No picks in Today's Picks to move.")
         return
 
     headers = all_rows[0]
+    data_rows = all_rows[1:]
+
     try:
         date_col = headers.index("Date")
         player_col = headers.index("Player")
         direction_col = headers.index("Direction")
         result_col = headers.index("Result")
     except ValueError:
-        print("  Warning: Could not find expected columns in sheet — skipping results update.")
+        print("  Warning: Could not find expected columns — skipping results move.")
         return
 
-    updates = []
-    updated = 0
+    yesterday_rows = [r for r in data_rows if len(r) > date_col and r[date_col] == yesterday]
+    if not yesterday_rows:
+        print(f"  No rows for {yesterday} in Today's Picks.")
+        return
 
-    for row_idx, row in enumerate(all_rows[1:], start=2):  # row 1 is header; Sheets is 1-indexed
-        if len(row) <= result_col:
-            continue
-        if row[date_col] != yesterday:
-            continue
-        if row[result_col].strip():  # already filled in
-            continue
+    # Build results lookup from real_labels.csv
+    results_lookup: dict[str, dict] = {}
+    if os.path.exists(real_labels_path):
+        with open(real_labels_path, newline="") as f:
+            for row in csv.DictReader(f):
+                if row.get("game_date") == yesterday:
+                    norm = key_to_normalized(row["player_key"])
+                    results_lookup[norm] = {
+                        "actual_sog": float(row["actual_sog"]),
+                        "line": float(row["line"]),
+                    }
 
-        norm = normalize_name(row[player_col])
-        result_data = results_lookup.get(norm)
-        if result_data is None:
-            continue
+    # Fill in results and build rows to append to Results sheet
+    completed_rows = []
+    for row in yesterday_rows:
+        result_cell = row[result_col].strip() if len(row) > result_col else ""
+        if not result_cell:
+            norm = normalize_name(row[player_col])
+            result_data = results_lookup.get(norm)
+            if result_data:
+                actual = result_data["actual_sog"]
+                line = result_data["line"]
+                direction = row[direction_col] if len(row) > direction_col else "OVER"
+                went_over = actual > line
+                hit = (went_over and direction == "OVER") or (not went_over and direction == "UNDER")
+                result_cell = f"{actual:.1f} SOG ({'HIT' if hit else 'MISS'})"
 
-        actual = result_data["actual_sog"]
-        line = result_data["line"]
-        direction = row[direction_col] if len(row) > direction_col else "OVER"
-        went_over = actual > line
-        hit = (went_over and direction == "OVER") or (not went_over and direction == "UNDER")
-        label = "HIT" if hit else "MISS"
-        cell_value = f"{actual:.1f} SOG ({label})"
+        completed_row = list(row)
+        while len(completed_row) <= result_col:
+            completed_row.append("")
+        completed_row[result_col] = result_cell
+        completed_rows.append(completed_row)
 
-        # gspread batch_update uses A1 notation
-        col_letter = chr(ord("A") + result_col)
-        updates.append({"range": f"{col_letter}{row_idx}", "values": [[cell_value]]})
-        updated += 1
+    # Ensure Results sheet has headers before appending
+    existing_results = results_ws.get_all_values()
+    if not existing_results:
+        results_ws.append_row(SHEET_HEADERS)
 
-    if updates:
-        worksheet.spreadsheet.values_batch_update({"data": updates, "valueInputOption": "RAW"})
-        print(f"  Updated {updated} result(s) for {yesterday} in Google Sheet.")
-    else:
-        print(f"  No sheet rows matched for {yesterday} results update.")
+    results_ws.append_rows(completed_rows, value_input_option="USER_ENTERED")
+    print(f"  Moved {len(completed_rows)} pick(s) from Yesterday → Results sheet.")
 
 
 def _apply_structural_formatting(spreadsheet, sheet_id: int) -> None:
@@ -311,7 +324,7 @@ def _apply_conditional_formatting(spreadsheet, sheet_id: int) -> None:
 
 
 def apply_sheet_formatting(spreadsheet, worksheet) -> None:
-    """Apply all visual formatting to the Picks worksheet. Safe to call on every run."""
+    """Apply all visual formatting to a worksheet. Safe to call on every run."""
     sheet_id = worksheet.id
     _apply_structural_formatting(spreadsheet, sheet_id)
     _apply_conditional_formatting(spreadsheet, sheet_id)
@@ -367,35 +380,28 @@ def main():
         print("No flagged plays to export.")
         return
 
-    print(f"Authenticating with Google Sheets...")
+    print("Authenticating with Google Sheets...")
     creds = get_google_creds()
     client = gspread.authorize(creds)
-
     spreadsheet = client.open_by_key(sheet_id)
 
-    # Use or create a worksheet named "Picks"
-    try:
-        worksheet = spreadsheet.worksheet("Picks")
-    except gspread.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title="Picks", rows=1000, cols=20)
-        worksheet.append_row(SHEET_HEADERS)
-        print("Created 'Picks' worksheet with headers.")
+    picks_ws = get_or_create_worksheet(spreadsheet, "Today's Picks")
+    results_ws = get_or_create_worksheet(spreadsheet, "Results")
 
-    # Check if headers exist; add if sheet is empty
-    existing = worksheet.get_all_values()
-    if not existing:
-        worksheet.append_row(SHEET_HEADERS)
+    # Move yesterday's picks (with results filled in) to the Results sheet
+    print("Moving yesterday's picks to Results...")
+    move_yesterday_to_results(picks_ws, results_ws)
 
-    # Apply visual formatting (idempotent — safe every run)
+    # Apply formatting to both sheets
     print("Applying sheet formatting...")
-    apply_sheet_formatting(spreadsheet, worksheet)
+    apply_sheet_formatting(spreadsheet, picks_ws)
+    apply_sheet_formatting(spreadsheet, results_ws)
 
-    # Fill in yesterday's results before appending today's rows
-    print("Updating yesterday's results...")
-    update_yesterday_results(worksheet)
-
-    worksheet.append_rows(sheet_rows, value_input_option="USER_ENTERED")
-    print(f"Exported {len(sheet_rows)} picks to Google Sheet.")
+    # Clear Today's Picks and write fresh predictions
+    picks_ws.clear()
+    picks_ws.append_row(SHEET_HEADERS)
+    picks_ws.append_rows(sheet_rows, value_input_option="USER_ENTERED")
+    print(f"Exported {len(sheet_rows)} picks to \"Today's Picks\".")
     print(f"Sheet URL: https://docs.google.com/spreadsheets/d/{sheet_id}")
 
 
