@@ -13,7 +13,7 @@ Requires:
 Output: .tmp/best_lines_YYYY-MM-DD.csv
 
 Schema: player_key, team, opponent, projected_sog, confidence_score,
-        best_line, best_book, best_over_odds, line_spread, edge,
+        best_line, best_book, odds, line_spread, edge,
         flagged, direction
 """
 
@@ -87,12 +87,14 @@ def main():
         # and worst line (for spread calculation)
         best_line = None
         best_book = None
-        best_over_odds = None
+        odds = None
+        best_under_odds = None
         worst_line = None
 
         for entry in player_odds:
             line = entry.get("line")
             over_odds = entry.get("over_odds")
+            under_odds = entry.get("under_odds")
             book = entry.get("book", "")
 
             if line is None:
@@ -107,12 +109,13 @@ def main():
             is_tied_better_odds = (
                 line == best_line
                 and over_odds is not None
-                and (best_over_odds is None or over_odds > best_over_odds)
+                and (odds is None or over_odds > odds)
             )
             if is_better_line or is_tied_better_odds:
                 best_line = line
                 best_book = book
-                best_over_odds = over_odds
+                odds = over_odds
+                best_under_odds = under_odds
 
         if best_line is None:
             no_odds_count += 1
@@ -133,6 +136,9 @@ def main():
         # Flag line shopping opportunities
         shopping_flag = "YES" if line_spread >= 0.5 else "NO"
 
+        # Report the odds for the direction we're actually betting
+        reported_odds = odds if direction == "OVER" else best_under_odds
+
         results.append({
             "player_key": player_key,
             "team": pred["team"],
@@ -141,7 +147,7 @@ def main():
             "confidence_score": final_confidence,
             "best_line": best_line,
             "best_book": best_book,
-            "best_over_odds": best_over_odds if best_over_odds else "N/A",
+            "odds": reported_odds if reported_odds is not None else "N/A",
             "line_spread": line_spread,
             "edge": edge,
             "direction": direction,
@@ -155,7 +161,7 @@ def main():
     out_path = os.path.join(TMP_DIR, f"best_lines_{today_str}.csv")
     fieldnames = [
         "player_key", "team", "opponent", "projected_sog", "confidence_score",
-        "best_line", "best_book", "best_over_odds", "line_spread",
+        "best_line", "best_book", "odds", "line_spread",
         "edge", "direction", "flagged", "line_shopping",
     ]
     with open(out_path, "w", newline="") as f:

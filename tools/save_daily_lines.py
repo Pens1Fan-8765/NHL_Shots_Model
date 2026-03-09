@@ -14,7 +14,7 @@ Requires:
 
 Output:
   .tmp/pending_labels_YYYY-MM-DD.csv
-  Schema: player_key, game_date, best_line, best_book, best_over_odds
+  Schema: player_key, game_date, best_line, best_book, odds
 """
 
 import csv
@@ -48,14 +48,14 @@ def main():
             "game_date": today_str,
             "best_line": row["best_line"],
             "best_book": row["best_book"],
-            "best_over_odds": row["best_over_odds"],
+            "odds": row["odds"],
         }
         for _, row in df.iterrows()
     ]
 
     with open(pending_path, "w", newline="") as f:
         writer = csv.DictWriter(
-            f, fieldnames=["player_key", "game_date", "best_line", "best_book", "best_over_odds"]
+            f, fieldnames=["player_key", "game_date", "best_line", "best_book", "odds"]
         )
         writer.writeheader()
         writer.writerows(rows)
