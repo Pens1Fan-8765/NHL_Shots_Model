@@ -13,7 +13,7 @@ Requires:
 Output: .tmp/best_lines_YYYY-MM-DD.csv
 
 Schema: player_key, team, opponent, projected_sog, confidence_score,
-        best_line, best_book, best_over_odds, line_spread, edge,
+        best_line, best_book, odds, line_spread, edge,
         flagged, direction
 """
 
@@ -150,6 +150,9 @@ def main():
 
         # Flag line shopping opportunities
         shopping_flag = "YES" if line_spread >= 0.5 else "NO"
+
+        # Report the odds for the direction we're actually betting
+        reported_odds = best_over_odds if direction == "OVER" else best_under_odds
 
         results.append({
             "player_key": player_key,

@@ -798,35 +798,35 @@ def update_historical_sheet(historical_ws) -> None:
     by move_yesterday_to_results() and must never be wiped.
     """
     # Row 1: title
-    historical_ws.update("A1", [["NHL SHOTS MODEL — HISTORICAL PERFORMANCE"]], value_input_option="RAW")
+    historical_ws.update([["NHL SHOTS MODEL — HISTORICAL PERFORMANCE"]], "A1", value_input_option="RAW")
 
     # Row 3-4: stat labels + formula values (auto-update as data rows grow)
-    historical_ws.update("A3:D3", [["Total Picks", "Hits", "Misses", "Hit Rate"]], value_input_option="RAW")
+    historical_ws.update([["Total Picks", "Hits", "Misses", "Hit Rate"]], "A3:D3", value_input_option="RAW")
     historical_ws.update(
-        "A4:D4",
         [[
             '=COUNTA(A9:A1000)',
             '=COUNTIF(M9:M1000,"*HIT*")',
             '=COUNTIF(M9:M1000,"*MISS*")',
             '=IF(A4=0,"—",TEXT(B4/A4,"0.0%"))',
         ]],
+        "A4:D4",
         value_input_option="USER_ENTERED",
     )
 
     # Chart data source in N3:O4 (used by the donut chart — auto-updates)
     historical_ws.update(
-        "N3:O4",
         [
             ["Hits",   '=COUNTIF(M9:M1000,"*HIT*")'],
             ["Misses", '=COUNTIF(M9:M1000,"*MISS*")'],
         ],
+        "N3:O4",
         value_input_option="USER_ENTERED",
     )
 
     # Row 8: column headers (only write if missing)
     existing = historical_ws.get_all_values()
     if len(existing) < 8 or existing[7] != SHEET_HEADERS:
-        historical_ws.update("A8", [SHEET_HEADERS], value_input_option="RAW")
+        historical_ws.update([SHEET_HEADERS], "A8", value_input_option="RAW")
 
     total = max(0, len(existing) - 8) if len(existing) > 8 else 0
     print(f"  Historical Picks w/ Hit Rate: summary updated ({total} total completed pick(s)).")
@@ -893,14 +893,14 @@ def main():
     results_ws = get_or_create_worksheet(spreadsheet, "Yesterday's Scorecard")
     historical_ws = get_or_create_worksheet(spreadsheet, "Historical Picks w/ Hit Rate")
 
-    # Fill in results, append to Historical Picks w/ Hit Rate, clear+rewrite Yesterday's Scorecard with yesterday only
-    print("Processing yesterday's results...")
-    move_yesterday_to_results(results_ws, historical_ws)
-
-    # Update Historical Picks w/ Hit Rate summary section (does not touch data rows)
+    # Write Historical summary section FIRST (rows 1-8) so append_rows lands data at row 9+
     print("Updating Historical Picks w/ Hit Rate summary...")
     update_historical_sheet(historical_ws)
     _apply_historical_formatting(spreadsheet, historical_ws.id)
+
+    # Fill in results, append to Historical Picks w/ Hit Rate, clear+rewrite Yesterday's Scorecard with yesterday only
+    print("Processing yesterday's results...")
+    move_yesterday_to_results(results_ws, historical_ws)
 
     # Apply formatting to Today's Picks and Yesterday's Scorecard
     print("Applying sheet formatting...")

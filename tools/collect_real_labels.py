@@ -112,7 +112,7 @@ def main():
                 "actual_sog": actual_sog,
                 "line": row["best_line"],
                 "book": row["best_book"],
-                "over_odds": row["best_over_odds"],
+                "over_odds": row.get("odds") or row.get("best_over_odds"),
             })
             file_resolved += 1
 

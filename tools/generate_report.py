@@ -150,7 +150,7 @@ def main():
             line = row.get("best_line", "")
             direction = row.get("direction", "OVER")
             book = row.get("best_book", "")[:12]
-            odds = format_odds(row.get("best_over_odds", "N/A"))
+            odds = format_odds(row.get("odds", "N/A"))
             conf = f"{float(row.get('confidence_score', 0)):.0f}%"
             edge = f"{float(row.get('edge', 0)):+.2f}"
 
