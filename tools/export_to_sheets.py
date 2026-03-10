@@ -26,6 +26,8 @@ First-time setup:
 """
 
 import csv
+import glob
+import json
 import os
 import re
 from datetime import date, timedelta
@@ -95,97 +97,277 @@ def key_to_normalized(player_key: str) -> str:
     return re.sub(r"[^a-z0-9]", "", prefix.lower())
 
 
-def move_yesterday_to_results(picks_ws, results_ws, historical_ws) -> None:
+def _grade_picks_for_date(game_date: str, real_labels_path: str) -> list[list]:
     """
-    1. Read yesterday's picks from 'Today's Picks' and fill in results.
-    2. Append completed rows to 'Historical Picks w/ Hit Rate' (permanent — never cleared).
-    3. Clear 'Yesterday's Scorecard' and write only yesterday's completed picks.
+    Load best_lines_{game_date}.csv, look up actual SOG, and return graded sheet rows.
+    Returns an empty list if the file doesn't exist or has no flagged picks.
     """
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-    real_labels_path = os.path.join(TMP_DIR, "real_labels.csv")
+    best_lines_path = os.path.join(TMP_DIR, f"best_lines_{game_date}.csv")
+    if not os.path.exists(best_lines_path):
+        return []
 
-    all_rows = picks_ws.get_all_values()
-    if len(all_rows) <= 1:
-        print("  No picks in Today's Picks to move.")
-        results_ws.clear()
-        results_ws.append_row(SHEET_HEADERS)
-        return
+    raw_rows = []
+    with open(best_lines_path, newline="") as f:
+        for row in csv.DictReader(f):
+            raw_rows.append(row)
 
-    headers = all_rows[0]
-    data_rows = all_rows[1:]
+    base_rows = build_sheet_rows(raw_rows, game_date)
+    if not base_rows:
+        return []
 
-    try:
-        date_col = headers.index("Date")
-        player_col = headers.index("Player")
-        direction_col = headers.index("Direction")
-        result_col = headers.index("Result")
-    except ValueError:
-        print("  Warning: Could not find expected columns — skipping results move.")
-        return
-
-    yesterday_rows = [r for r in data_rows if len(r) > date_col and r[date_col] == yesterday]
-    if not yesterday_rows:
-        print(f"  No rows for {yesterday} in Today's Picks.")
-        results_ws.clear()
-        results_ws.append_row(SHEET_HEADERS)
-        return
+    # Column indices (matching SHEET_HEADERS order)
+    PLAYER_COL = 1
+    LINE_COL = 5
+    DIRECTION_COL = 6
+    RESULT_COL = 12
 
     # Build results lookup from real_labels.csv
     results_lookup: dict[str, dict] = {}
     if os.path.exists(real_labels_path):
         with open(real_labels_path, newline="") as f:
             for row in csv.DictReader(f):
-                if row.get("game_date") == yesterday:
+                if row.get("game_date") == game_date:
                     norm = key_to_normalized(row["player_key"])
                     results_lookup[norm] = {
                         "actual_sog": float(row["actual_sog"]),
                         "line": float(row["line"]),
                     }
 
-    # Fill in results
-    completed_rows = []
-    for row in yesterday_rows:
-        result_cell = row[result_col].strip() if len(row) > result_col else ""
-        if not result_cell:
-            norm = normalize_name(row[player_col])
-            result_data = results_lookup.get(norm)
-            if result_data:
-                actual = result_data["actual_sog"]
-                line = result_data["line"]
-                direction = row[direction_col] if len(row) > direction_col else "OVER"
-                went_over = actual > line
-                hit = (went_over and direction == "OVER") or (not went_over and direction == "UNDER")
-                result_cell = f"{actual:.1f} SOG ({'HIT' if hit else 'MISS'})"
-
-        completed_row = list(row)
-        while len(completed_row) <= result_col:
-            completed_row.append("")
-        completed_row[result_col] = result_cell
-        completed_rows.append(completed_row)
-
-    # Append to Historical Picks w/ Hit Rate — skip if yesterday's date already present (duplicate guard)
-    existing_historical = historical_ws.get_all_values()
-    existing_dates = set()
-    if len(existing_historical) > 1:
+    # Fallback: load actual SOG directly from player_logs_*.json files
+    logs_sog_lookup: dict[str, float] = {}
+    for log_file in glob.glob(os.path.join(TMP_DIR, "player_logs_*.json")):
         try:
-            h_date_col = existing_historical[0].index("Date")
-            for r in existing_historical[1:]:
-                if len(r) > h_date_col:
-                    existing_dates.add(r[h_date_col])
-        except (ValueError, IndexError):
+            with open(log_file) as lf:
+                log_data = json.load(lf)
+            for player_key, games in log_data.items():
+                norm = key_to_normalized(player_key)
+                for game in games:
+                    if game.get("date") == game_date and game.get("sog") is not None:
+                        logs_sog_lookup[norm] = float(game["sog"])
+        except Exception:
             pass
 
-    if yesterday not in existing_dates:
-        historical_ws.append_rows(completed_rows, value_input_option="RAW")
-        print(f"  Appended {len(completed_rows)} pick(s) to Historical Picks w/ Hit Rate.")
+    if results_lookup:
+        print(f"    {len(results_lookup)} result(s) from real_labels.csv")
+    elif logs_sog_lookup:
+        print(f"    {len(logs_sog_lookup)} result(s) from player_logs fallback")
     else:
-        print(f"  Historical Picks w/ Hit Rate already has rows for {yesterday} — skipping duplicate append.")
+        print(f"    Warning: no actual SOG data found — results will be blank")
 
-    # Clear Yesterday's Scorecard and write only yesterday's completed picks
+    # Grade each pick
+    completed_rows = []
+    for row in base_rows:
+        player_name = row[PLAYER_COL] if len(row) > PLAYER_COL else ""
+        norm = normalize_name(player_name)
+        direction = row[DIRECTION_COL] if len(row) > DIRECTION_COL else "OVER"
+
+        result_data = results_lookup.get(norm)
+        if result_data:
+            actual = result_data["actual_sog"]
+            line = result_data["line"]
+        elif norm in logs_sog_lookup:
+            actual = logs_sog_lookup[norm]
+            try:
+                line = float(row[LINE_COL]) if len(row) > LINE_COL and row[LINE_COL] else None
+            except (ValueError, TypeError):
+                line = None
+        else:
+            actual = None
+            line = None
+
+        result_cell = ""
+        if actual is not None and line is not None:
+            went_over = actual > line
+            hit = (went_over and direction == "OVER") or (not went_over and direction == "UNDER")
+            result_cell = f"{actual:.1f} SOG ({'HIT' if hit else 'MISS'})"
+
+        completed_row = list(row)
+        while len(completed_row) <= RESULT_COL:
+            completed_row.append("")
+        completed_row[RESULT_COL] = result_cell
+        completed_rows.append(completed_row)
+
+    return completed_rows
+
+
+def move_yesterday_to_results(results_ws, historical_ws) -> None:
+    """
+    Scans all past best_lines_*.csv files (not today's), grades each one against
+    real_labels.csv / player_logs fallback, then:
+      - Appends any new dates to Historical Picks w/ Hit Rate
+      - Fills in missing results for dates already in Historical
+      - Rewrites Yesterday's Scorecard with the most recently graded date's picks
+    Also handles dates that exist in Historical but have no best_lines CSV
+    (e.g., pipeline was skipped for a day) by grading directly from player logs.
+    """
+    today_str = date.today().isoformat()
+    real_labels_path = os.path.join(TMP_DIR, "real_labels.csv")
+    PLAYER_COL = 1
+    LINE_COL = 5
+    DIRECTION_COL = 6
+    RESULT_COL = 12
+
+    # Find all past best_lines files (sorted oldest→newest, exclude today)
+    all_bl_files = sorted(glob.glob(os.path.join(TMP_DIR, "best_lines_*.csv")))
+    past_files = [
+        f for f in all_bl_files
+        if os.path.basename(f) != f"best_lines_{today_str}.csv"
+    ]
+
+    if not past_files:
+        print("  No past best_lines files found — nothing to grade.")
+        results_ws.clear()
+        results_ws.append_row(SHEET_HEADERS)
+        return
+
+    # Read the full historical sheet once (avoid repeated API calls)
+    all_hist = historical_ws.get_all_values()
+    header_row_idx = 7  # row 8 (0-indexed) is the column header row
+    for i, r in enumerate(all_hist):
+        if r and r[0] == "Date":
+            header_row_idx = i
+            break
+
+    # Build a map: date -> list of (1-indexed sheet row, row_list) for existing historical data
+    hist_by_date: dict[str, list] = {}
+    for i, r in enumerate(all_hist):
+        if i <= header_row_idx:
+            continue
+        if len(r) > 0 and r[0]:
+            d = r[0]
+            hist_by_date.setdefault(d, []).append((i + 1, r))
+
+    scorecard_rows = []   # will hold the most recently graded date's completed rows
+    scorecard_date = ""
+
+    for bl_path in past_files:
+        # Extract date from filename: best_lines_YYYY-MM-DD.csv
+        fname = os.path.basename(bl_path)
+        game_date = fname[len("best_lines_"):-len(".csv")]
+
+        print(f"  Grading {game_date}...")
+        completed_rows = _grade_picks_for_date(game_date, real_labels_path)
+
+        if not completed_rows:
+            print(f"    No flagged picks for {game_date} — skipping.")
+            continue
+
+        # Update scorecard (last/most recent date wins)
+        scorecard_rows = completed_rows
+        scorecard_date = game_date
+
+        existing_entries = hist_by_date.get(game_date, [])
+
+        if not existing_entries:
+            # New date — append to historical
+            historical_ws.append_rows(completed_rows, value_input_option="RAW")
+            print(f"    Appended {len(completed_rows)} pick(s) to Historical.")
+            # Refresh our local copy so row numbers stay correct on next iteration
+            all_hist = historical_ws.get_all_values()
+            hist_by_date.clear()
+            for i, r in enumerate(all_hist):
+                if i <= header_row_idx:
+                    continue
+                if len(r) > 0 and r[0]:
+                    hist_by_date.setdefault(r[0], []).append((i + 1, r))
+        else:
+            # Rows exist — fill in any missing results
+            result_by_player = {
+                normalize_name(cr[PLAYER_COL]): cr[RESULT_COL]
+                for cr in completed_rows
+                if len(cr) > RESULT_COL and cr[RESULT_COL]
+            }
+            updated_count = 0
+            for sheet_row_num, r in existing_entries:
+                existing_result = r[RESULT_COL] if len(r) > RESULT_COL else ""
+                if not existing_result.strip():
+                    player_norm = normalize_name(r[PLAYER_COL]) if len(r) > PLAYER_COL else ""
+                    new_result = result_by_player.get(player_norm, "")
+                    if new_result:
+                        historical_ws.update_cell(sheet_row_num, RESULT_COL + 1, new_result)
+                        updated_count += 1
+            if updated_count:
+                print(f"    Updated {updated_count} result(s) in Historical for {game_date}.")
+            elif result_by_player:
+                print(f"    Historical already has results for {game_date} — skipping.")
+            else:
+                print(f"    No result data available yet for {game_date}.")
+
+    # --- Handle dates in Historical that have no best_lines CSV ---
+    # (e.g., pipeline was skipped for a day — picks were added by an older run)
+    handled_dates = {
+        os.path.basename(p)[len("best_lines_"):-len(".csv")]
+        for p in past_files
+    }
+
+    # Build full SOG lookup from all player logs: {norm_name: {date: sog}}
+    logs_sog_by_date: dict[str, dict[str, float]] = {}
+    for log_file in glob.glob(os.path.join(TMP_DIR, "player_logs_*.json")):
+        try:
+            with open(log_file) as lf:
+                log_data = json.load(lf)
+            for player_key, games in log_data.items():
+                norm = key_to_normalized(player_key)
+                if norm not in logs_sog_by_date:
+                    logs_sog_by_date[norm] = {}
+                for game in games:
+                    if game.get("date") and game.get("sog") is not None:
+                        logs_sog_by_date[norm][game["date"]] = float(game["sog"])
+        except Exception:
+            pass
+
+    for game_date in sorted(hist_by_date.keys()):
+        if game_date == today_str or game_date in handled_dates:
+            continue
+
+        print(f"  Grading {game_date} (Historical only — no best_lines file)...")
+        existing_entries = hist_by_date.get(game_date, [])
+
+        graded_rows = []
+        updated_count = 0
+
+        for sheet_row_num, r in existing_entries:
+            existing_result = r[RESULT_COL] if len(r) > RESULT_COL else ""
+
+            player_name = r[PLAYER_COL] if len(r) > PLAYER_COL else ""
+            norm = normalize_name(player_name)
+            direction = r[DIRECTION_COL] if len(r) > DIRECTION_COL else "OVER"
+            try:
+                line = float(r[LINE_COL]) if len(r) > LINE_COL and r[LINE_COL] else None
+            except (ValueError, TypeError):
+                line = None
+
+            result_cell = existing_result
+            if not existing_result.strip():
+                actual = logs_sog_by_date.get(norm, {}).get(game_date)
+                if actual is not None and line is not None:
+                    went_over = actual > line
+                    hit = (went_over and direction == "OVER") or (not went_over and direction == "UNDER")
+                    result_cell = f"{actual:.1f} SOG ({'HIT' if hit else 'MISS'})"
+                    historical_ws.update_cell(sheet_row_num, RESULT_COL + 1, result_cell)
+                    updated_count += 1
+
+            completed_row = list(r)
+            while len(completed_row) <= RESULT_COL:
+                completed_row.append("")
+            completed_row[RESULT_COL] = result_cell
+            graded_rows.append(completed_row)
+
+        if updated_count:
+            print(f"    Updated {updated_count} result(s) for {game_date}.")
+        else:
+            print(f"    No game log data found for {game_date} — results left blank.")
+
+        if graded_rows:
+            scorecard_rows = graded_rows
+            scorecard_date = game_date
+
+    # --- Yesterday's Scorecard: show the most recently graded date's picks ---
     results_ws.clear()
     results_ws.append_row(SHEET_HEADERS)
-    results_ws.append_rows(completed_rows, value_input_option="USER_ENTERED")
-    print(f"  Yesterday's Scorecard: {len(completed_rows)} completed pick(s) from {yesterday}.")
+    if scorecard_rows:
+        results_ws.append_rows(scorecard_rows, value_input_option="USER_ENTERED")
+    print(f"  Yesterday's Scorecard: {len(scorecard_rows)} pick(s) from {scorecard_date}.")
 
 
 def _apply_structural_formatting(spreadsheet, sheet_id: int) -> None:
@@ -667,6 +849,8 @@ def build_sheet_rows(rows: list[dict], today_str: str) -> list[list]:
     flagged.sort(key=lambda x: float(x.get("confidence_score", 0)), reverse=True)
 
     for row in flagged:
+        direction = row.get("direction", "OVER")
+        odds_val = row.get("best_under_odds", "") if direction == "UNDER" else row.get("best_over_odds", "")
         sheet_rows.append([
             today_str,
             format_player_name(row["player_key"]),
@@ -674,9 +858,9 @@ def build_sheet_rows(rows: list[dict], today_str: str) -> list[list]:
             row.get("opponent", ""),
             row.get("projected_sog", ""),
             row.get("best_line", ""),
-            row.get("direction", "OVER"),
+            direction,
             row.get("best_book", ""),
-            format_odds(row.get("odds", "")),
+            format_odds(odds_val),
             row.get("confidence_score", ""),
             row.get("edge", ""),
             row.get("line_shopping", "NO"),
@@ -716,7 +900,7 @@ def main():
 
     # Fill in results, append to Historical Picks w/ Hit Rate, clear+rewrite Yesterday's Scorecard with yesterday only
     print("Processing yesterday's results...")
-    move_yesterday_to_results(picks_ws, results_ws, historical_ws)
+    move_yesterday_to_results(results_ws, historical_ws)
 
     # Apply formatting to Today's Picks and Yesterday's Scorecard
     print("Applying sheet formatting...")

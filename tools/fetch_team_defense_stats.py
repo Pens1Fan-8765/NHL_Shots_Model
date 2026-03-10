@@ -33,6 +33,7 @@ Schema:
 }
 """
 
+import glob
 import json
 import os
 import re
@@ -249,7 +250,25 @@ def main():
 
     # --- Step 1: Shotpropz position-based defense stats (primary signal) ---
     print("\n=== Scraping shotpropz.com (position-based defense stats) ===")
-    ytd_data, l10_data = scrape_shotpropz()
+    try:
+        ytd_data, l10_data = scrape_shotpropz()
+    except Exception as scrape_err:
+        print(f"  WARNING: shotpropz scrape failed ({scrape_err})")
+        # Fall back to most recent cached team_defense file
+        cached_files = sorted(glob.glob(os.path.join(TMP_DIR, "team_defense_*.json")))
+        if cached_files:
+            fallback = cached_files[-1]
+            print(f"  Using cached data: {os.path.basename(fallback)}")
+            with open(fallback) as f:
+                cached = json.load(f)
+            out_path = os.path.join(TMP_DIR, f"team_defense_{today_str}.json")
+            with open(out_path, "w") as f:
+                json.dump(cached, f, indent=2)
+            print(f"  Copied to {out_path}")
+            return
+        else:
+            print("  No cached team defense data found — skipping.")
+            return
 
     team_defense: dict[str, dict] = {}
     missing_defense = []
