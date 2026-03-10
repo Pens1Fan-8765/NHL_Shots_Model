@@ -83,16 +83,27 @@ def main():
             no_odds_count += 1
             continue
 
-        # Find best line (highest line = most favorable for over bet)
-        # and worst line (for spread calculation)
+        # Determine direction first using average line across all books
+        valid_lines = [e["line"] for e in player_odds if e.get("line") is not None]
+        if not valid_lines:
+            no_odds_count += 1
+            continue
+        avg_line = sum(valid_lines) / len(valid_lines)
+        direction = "OVER" if projected_sog > avg_line else "UNDER"
+
+        # Find best line and book for the determined direction
+        # OVER: want the lowest line (easiest to hit), tie-break on best over_odds
+        # UNDER: want the highest line (easiest to hit), tie-break on best under_odds
         best_line = None
         best_book = None
         best_over_odds = None
+        best_under_odds = None
         worst_line = None
 
         for entry in player_odds:
             line = entry.get("line")
             over_odds = entry.get("over_odds")
+            under_odds = entry.get("under_odds")
             book = entry.get("book", "")
 
             if line is None:
@@ -101,18 +112,26 @@ def main():
             if worst_line is None or line > worst_line:
                 worst_line = line
 
-            # Lower line = better for over bet (easier to hit)
-            # Tie-break: when lines are equal, prefer better over odds (less juice)
-            is_better_line = best_line is None or line < best_line
-            is_tied_better_odds = (
-                line == best_line
-                and over_odds is not None
-                and (best_over_odds is None or over_odds > best_over_odds)
-            )
+            if direction == "OVER":
+                is_better_line = best_line is None or line < best_line
+                is_tied_better_odds = (
+                    line == best_line
+                    and over_odds is not None
+                    and (best_over_odds is None or over_odds > best_over_odds)
+                )
+            else:  # UNDER
+                is_better_line = best_line is None or line > best_line
+                is_tied_better_odds = (
+                    line == best_line
+                    and under_odds is not None
+                    and (best_under_odds is None or under_odds > best_under_odds)
+                )
+
             if is_better_line or is_tied_better_odds:
                 best_line = line
                 best_book = book
                 best_over_odds = over_odds
+                best_under_odds = under_odds
 
         if best_line is None:
             no_odds_count += 1
@@ -127,7 +146,6 @@ def main():
         else:
             final_confidence = confidence_vs_line(projected_sog, best_line)
 
-        direction = "OVER" if projected_sog > best_line else "UNDER"
         flagged = "YES" if final_confidence >= CONFIDENCE_THRESHOLD and abs(edge) >= 0.3 else "NO"
 
         # Flag line shopping opportunities
@@ -141,7 +159,8 @@ def main():
             "confidence_score": final_confidence,
             "best_line": best_line,
             "best_book": best_book,
-            "best_over_odds": best_over_odds if best_over_odds else "N/A",
+            "best_over_odds": best_over_odds if best_over_odds is not None else "N/A",
+            "best_under_odds": best_under_odds if best_under_odds is not None else "N/A",
             "line_spread": line_spread,
             "edge": edge,
             "direction": direction,
@@ -155,7 +174,7 @@ def main():
     out_path = os.path.join(TMP_DIR, f"best_lines_{today_str}.csv")
     fieldnames = [
         "player_key", "team", "opponent", "projected_sog", "confidence_score",
-        "best_line", "best_book", "best_over_odds", "line_spread",
+        "best_line", "best_book", "best_over_odds", "best_under_odds", "line_spread",
         "edge", "direction", "flagged", "line_shopping",
     ]
     with open(out_path, "w", newline="") as f:
