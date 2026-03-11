@@ -13,6 +13,8 @@ Player key format: {first_last}_{team_abbr} e.g. nathan_mackinnon_COL
 Filters: Forwards averaging <= 14 min TOI excluded. Defensemen averaging <= 18 min TOI excluded.
 """
 
+import csv
+import glob
 import json
 import os
 import time
@@ -100,20 +102,25 @@ def main():
         teams.add(game["home_team"])
         teams.add(game["away_team"])
 
-    # Also include yesterday's teams so we can grade yesterday's picks
-    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
-    yesterday_schedule_path = os.path.join(TMP_DIR, f"schedule_{yesterday_str}.json")
-    if os.path.exists(yesterday_schedule_path):
-        with open(yesterday_schedule_path) as f:
-            yesterday_games = json.load(f)
-        yesterday_teams = set()
-        for game in yesterday_games:
-            yesterday_teams.add(game["home_team"])
-            yesterday_teams.add(game["away_team"])
-        new_teams = yesterday_teams - teams
-        if new_teams:
-            print(f"Also fetching {len(new_teams)} team(s) from yesterday's schedule (for grading): {', '.join(sorted(new_teams))}")
-            teams.update(new_teams)
+    # Also include teams of any players with unresolved pending labels (for grading)
+    # This is more reliable than relying on old schedule files existing in .tmp/
+    pending_teams: set[str] = set()
+    for pending_file in sorted(glob.glob(os.path.join(TMP_DIR, "pending_labels_*.csv"))):
+        if today_str in pending_file:
+            continue  # today's games haven't finished yet
+        try:
+            with open(pending_file, newline="") as f:
+                for row in csv.DictReader(f):
+                    player_key = row.get("player_key", "")
+                    if player_key:
+                        team = player_key.rsplit("_", 1)[-1].upper()
+                        pending_teams.add(team)
+        except Exception:
+            pass
+    new_teams = pending_teams - teams
+    if new_teams:
+        print(f"Also fetching {len(new_teams)} team(s) from pending labels (for grading): {', '.join(sorted(new_teams))}")
+        teams.update(new_teams)
 
     print(f"Fetching rosters for {len(teams)} teams: {', '.join(sorted(teams))}")
 
