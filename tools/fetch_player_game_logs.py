@@ -16,7 +16,7 @@ Filters: Forwards averaging <= 14 min TOI excluded. Defensemen averaging <= 18 m
 import json
 import os
 import time
-from datetime import date
+from datetime import date, timedelta
 import requests
 
 TMP_DIR = os.path.join(os.path.dirname(__file__), "..", ".tmp")
@@ -99,6 +99,21 @@ def main():
     for game in games:
         teams.add(game["home_team"])
         teams.add(game["away_team"])
+
+    # Also include yesterday's teams so we can grade yesterday's picks
+    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+    yesterday_schedule_path = os.path.join(TMP_DIR, f"schedule_{yesterday_str}.json")
+    if os.path.exists(yesterday_schedule_path):
+        with open(yesterday_schedule_path) as f:
+            yesterday_games = json.load(f)
+        yesterday_teams = set()
+        for game in yesterday_games:
+            yesterday_teams.add(game["home_team"])
+            yesterday_teams.add(game["away_team"])
+        new_teams = yesterday_teams - teams
+        if new_teams:
+            print(f"Also fetching {len(new_teams)} team(s) from yesterday's schedule (for grading): {', '.join(sorted(new_teams))}")
+            teams.update(new_teams)
 
     print(f"Fetching rosters for {len(teams)} teams: {', '.join(sorted(teams))}")
 
