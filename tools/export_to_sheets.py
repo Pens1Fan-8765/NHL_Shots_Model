@@ -3,10 +3,9 @@ export_to_sheets.py
 
 Pushes today's ranked picks to a shared Google Sheet.
 
-Three worksheets:
-  - "Today's Picks":   cleared each run and rewritten with today's predictions only
-  - "Yesterday's Scorecard":         yesterday's picks (with HIT/MISS filled in) appended here permanently
-  - "Historical Picks w/ Hit Rate": rebuilt each run — summary stats + all completed picks ever
+Two worksheets:
+  - "Today's Picks":              cleared each run and rewritten with today's predictions only
+  - "Historical Picks w/ Hit Rate": summary stats + all completed/graded picks ever
 
 Requires:
   .env with GOOGLE_SHEETS_ID
@@ -190,13 +189,12 @@ def _grade_picks_for_date(game_date: str, real_labels_path: str) -> list[list]:
     return completed_rows
 
 
-def move_yesterday_to_results(results_ws, historical_ws) -> None:
+def grade_and_update_historical(historical_ws) -> None:
     """
     Scans all past best_lines_*.csv files (not today's), grades each one against
     real_labels.csv / player_logs fallback, then:
       - Appends any new dates to Historical Picks w/ Hit Rate
       - Fills in missing results for dates already in Historical
-      - Rewrites Yesterday's Scorecard with the most recently graded date's picks
     Also handles dates that exist in Historical but have no best_lines CSV
     (e.g., pipeline was skipped for a day) by grading directly from player logs.
     """
@@ -216,8 +214,6 @@ def move_yesterday_to_results(results_ws, historical_ws) -> None:
 
     if not past_files:
         print("  No past best_lines files found — nothing to grade.")
-        results_ws.clear()
-        results_ws.append_row(SHEET_HEADERS)
         return
 
     # Read the full historical sheet once (avoid repeated API calls)
@@ -237,9 +233,6 @@ def move_yesterday_to_results(results_ws, historical_ws) -> None:
             d = r[0]
             hist_by_date.setdefault(d, []).append((i + 1, r))
 
-    scorecard_rows = []   # will hold the most recently graded date's completed rows
-    scorecard_date = ""
-
     for bl_path in past_files:
         # Extract date from filename: best_lines_YYYY-MM-DD.csv
         fname = os.path.basename(bl_path)
@@ -251,10 +244,6 @@ def move_yesterday_to_results(results_ws, historical_ws) -> None:
         if not completed_rows:
             print(f"    No flagged picks for {game_date} — skipping.")
             continue
-
-        # Update scorecard (last/most recent date wins)
-        scorecard_rows = completed_rows
-        scorecard_date = game_date
 
         existing_entries = hist_by_date.get(game_date, [])
 
@@ -323,7 +312,6 @@ def move_yesterday_to_results(results_ws, historical_ws) -> None:
         print(f"  Grading {game_date} (Historical only — no best_lines file)...")
         existing_entries = hist_by_date.get(game_date, [])
 
-        graded_rows = []
         updated_count = 0
 
         for sheet_row_num, r in existing_entries:
@@ -337,7 +325,6 @@ def move_yesterday_to_results(results_ws, historical_ws) -> None:
             except (ValueError, TypeError):
                 line = None
 
-            result_cell = existing_result
             if not existing_result.strip():
                 actual = logs_sog_by_date.get(norm, {}).get(game_date)
                 if actual is not None and line is not None:
@@ -347,27 +334,10 @@ def move_yesterday_to_results(results_ws, historical_ws) -> None:
                     historical_ws.update_cell(sheet_row_num, RESULT_COL + 1, result_cell)
                     updated_count += 1
 
-            completed_row = list(r)
-            while len(completed_row) <= RESULT_COL:
-                completed_row.append("")
-            completed_row[RESULT_COL] = result_cell
-            graded_rows.append(completed_row)
-
         if updated_count:
             print(f"    Updated {updated_count} result(s) for {game_date}.")
         else:
             print(f"    No game log data found for {game_date} — results left blank.")
-
-        if graded_rows:
-            scorecard_rows = graded_rows
-            scorecard_date = game_date
-
-    # --- Yesterday's Scorecard: show the most recently graded date's picks ---
-    results_ws.clear()
-    results_ws.append_row(SHEET_HEADERS)
-    if scorecard_rows:
-        results_ws.append_rows(scorecard_rows, value_input_option="USER_ENTERED")
-    print(f"  Yesterday's Scorecard: {len(scorecard_rows)} pick(s) from {scorecard_date}.")
 
 
 def _apply_structural_formatting(spreadsheet, sheet_id: int) -> None:
@@ -890,22 +860,29 @@ def main():
     spreadsheet = client.open_by_key(sheet_id)
 
     picks_ws = get_or_create_worksheet(spreadsheet, "Today's Picks")
-    results_ws = get_or_create_worksheet(spreadsheet, "Yesterday's Scorecard")
     historical_ws = get_or_create_worksheet(spreadsheet, "Historical Picks w/ Hit Rate")
+
+    # Delete legacy "Yesterday's" tabs if they exist
+    for stale_name in ("Yesterday's Scorecard", "Yesterday's Picks"):
+        try:
+            stale_ws = spreadsheet.worksheet(stale_name)
+            spreadsheet.del_worksheet(stale_ws)
+            print(f"  Deleted '{stale_name}' worksheet.")
+        except gspread.WorksheetNotFound:
+            pass
 
     # Write Historical summary section FIRST (rows 1-8) so append_rows lands data at row 9+
     print("Updating Historical Picks w/ Hit Rate summary...")
     update_historical_sheet(historical_ws)
     _apply_historical_formatting(spreadsheet, historical_ws.id)
 
-    # Fill in results, append to Historical Picks w/ Hit Rate, clear+rewrite Yesterday's Scorecard with yesterday only
+    # Grade yesterday's picks and append to Historical Picks w/ Hit Rate
     print("Processing yesterday's results...")
-    move_yesterday_to_results(results_ws, historical_ws)
+    grade_and_update_historical(historical_ws)
 
-    # Apply formatting to Today's Picks and Yesterday's Scorecard
+    # Apply formatting to Today's Picks
     print("Applying sheet formatting...")
     apply_sheet_formatting(spreadsheet, picks_ws)
-    apply_sheet_formatting(spreadsheet, results_ws)
 
     # Clear Today's Picks and write fresh predictions
     picks_ws.clear()
