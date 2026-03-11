@@ -164,6 +164,7 @@ def main():
             "best_book": best_book,
             "best_over_odds": best_over_odds if best_over_odds is not None else "N/A",
             "best_under_odds": best_under_odds if best_under_odds is not None else "N/A",
+            "odds": reported_odds if reported_odds is not None else "N/A",
             "line_spread": line_spread,
             "edge": edge,
             "direction": direction,
@@ -177,7 +178,7 @@ def main():
     out_path = os.path.join(TMP_DIR, f"best_lines_{today_str}.csv")
     fieldnames = [
         "player_key", "team", "opponent", "projected_sog", "confidence_score",
-        "best_line", "best_book", "best_over_odds", "best_under_odds", "line_spread",
+        "best_line", "best_book", "best_over_odds", "best_under_odds", "odds", "line_spread",
         "edge", "direction", "flagged", "line_shopping",
     ]
     with open(out_path, "w", newline="") as f:
