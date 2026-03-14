@@ -847,19 +847,20 @@ def main():
         return
 
     today_str = date.today().isoformat()
-    rows = load_best_lines(today_str)
-    sheet_rows = build_sheet_rows(rows, today_str)
 
-    if not sheet_rows:
-        print("No flagged plays to export.")
-        return
+    # Load today's picks — may be empty or file may not exist yet
+    try:
+        rows = load_best_lines(today_str)
+        sheet_rows = build_sheet_rows(rows, today_str)
+    except FileNotFoundError:
+        rows = []
+        sheet_rows = []
 
     print("Authenticating with Google Sheets...")
     creds = get_google_creds()
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(sheet_id)
 
-    picks_ws = get_or_create_worksheet(spreadsheet, "Today's Picks")
     historical_ws = get_or_create_worksheet(spreadsheet, "Historical Picks w/ Hit Rate")
 
     # Delete legacy "Yesterday's" tabs if they exist
@@ -880,11 +881,16 @@ def main():
     print("Processing yesterday's results...")
     grade_and_update_historical(historical_ws)
 
-    # Apply formatting to Today's Picks
+    if not sheet_rows:
+        print("No flagged plays today — grading complete.")
+        print(f"Sheet URL: https://docs.google.com/spreadsheets/d/{sheet_id}")
+        return
+
+    # Apply formatting to Today's Picks and write predictions
+    picks_ws = get_or_create_worksheet(spreadsheet, "Today's Picks")
     print("Applying sheet formatting...")
     apply_sheet_formatting(spreadsheet, picks_ws)
 
-    # Clear Today's Picks and write fresh predictions
     picks_ws.clear()
     picks_ws.append_row(SHEET_HEADERS)
     picks_ws.append_rows(sheet_rows, value_input_option="USER_ENTERED")
