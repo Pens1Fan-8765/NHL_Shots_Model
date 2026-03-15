@@ -17,7 +17,9 @@ import csv
 import glob
 import json
 import os
+import re
 import time
+import unicodedata
 from datetime import date, timedelta
 import requests
 
@@ -29,9 +31,19 @@ MIN_TOI_FORWARD = 14.0    # Centers, wings excluded if avg TOI <= this
 MIN_TOI_DEFENSE = 18.0    # Defensemen excluded if avg TOI < this
 
 
+def _normalize(s: str) -> str:
+    """Strip accents, remove periods, lowercase, replace spaces/hyphens with underscores."""
+    s = unicodedata.normalize("NFD", s)
+    s = s.encode("ascii", "ignore").decode("ascii")
+    s = s.lower().strip()
+    s = s.replace(".", "")
+    s = re.sub(r"[\s\-]+", "_", s)
+    s = re.sub(r"[^a-z0-9_]", "", s)
+    return s
+
+
 def make_player_key(first: str, last: str, team: str) -> str:
-    name = f"{first}_{last}".lower().replace(" ", "_").replace("-", "_").replace("'", "")
-    return f"{name}_{team.upper()}"
+    return f"{_normalize(first)}_{_normalize(last)}_{team.upper()}"
 
 
 def fetch_roster(team_abbr: str) -> list[dict]:

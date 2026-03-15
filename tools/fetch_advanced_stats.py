@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import unicodedata
 from datetime import date
 import requests
 
@@ -36,8 +37,11 @@ def current_season_id() -> str:
 
 
 def normalize_name(name: str) -> str:
-    """Lowercase, replace spaces/hyphens/apostrophes with underscores."""
+    """Lowercase, strip accents, remove periods, replace spaces/hyphens with underscores."""
+    name = unicodedata.normalize("NFD", name)
+    name = name.encode("ascii", "ignore").decode("ascii")
     name = name.lower().strip()
+    name = name.replace(".", "")
     name = re.sub(r"[\s\-]+", "_", name)
     name = re.sub(r"[^a-z0-9_]", "", name)
     return name

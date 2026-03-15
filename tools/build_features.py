@@ -67,6 +67,7 @@ def build_features(
     player_logs: dict[str, list],
     team_defense: dict[str, dict],
     advanced_stats: dict[str, dict],
+    today_str: str = "",
 ) -> list[dict]:
     # Build quick lookup: team -> opponent, home flag
     team_context: dict[str, dict] = {}
@@ -126,6 +127,7 @@ def build_features(
             "player_key": player_key,
             "team": team,
             "opponent": opponent,
+            "game_date": today_str,
             "home_flag": context["home"],
             "b2b_flag": b2b,
             "sog_avg_5": sog_avg_5,
@@ -157,12 +159,12 @@ def main():
     )
 
     print(f"Building features for {len(player_logs)} players...")
-    features = build_features(schedule, player_logs, team_defense, advanced_stats)
+    features = build_features(schedule, player_logs, team_defense, advanced_stats, today_str)
     print(f"Generated features for {len(features)} players in today's games.")
 
     out_path = os.path.join(TMP_DIR, f"features_{today_str}.csv")
     fieldnames = [
-        "player_key", "team", "opponent", "home_flag", "b2b_flag",
+        "player_key", "team", "opponent", "game_date", "home_flag", "b2b_flag",
         "sog_avg_5", "sog_avg_10", "sog_avg_20", "sog_vs_opp", "toi_avg_5",
         "opp_sa_per_game_season", "opp_sa_per_game_l10",
         "trend_ratio", "xSF_per_60", "CF_pct", "FF_pct", "iSCF_per_60",
